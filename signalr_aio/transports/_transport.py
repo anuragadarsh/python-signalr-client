@@ -75,19 +75,23 @@ class Transport:
         self._conn_handler = asyncio.ensure_future(self._socket(self.ws_loop), loop=self.ws_loop)
 
     async def _socket(self, loop):
-        try:
-            async with websockets.connect(self._ws_params.socket_url, extra_headers=self._ws_params.headers,
-                                          loop=loop) as self.ws:
-                self._connection.started = True
-                await self._master_handler(self.ws)
-        except asyncio.CancelledError:
-            self._reconnects += 1
-            if self._reconnects <= self._max_reconnects:
-                self._connect()
-            else:
-                # Stop the loop if the user is not using it for something else.
-                if len(asyncio.all_tasks()) and asyncio.current_task() == list(asyncio.all_tasks())[0]:
-                    self.ws_loop.stop()
+        while True:
+            if self.ws:
+                await self.ws.close()
+
+            try:
+                async with websockets.connect(self._ws_params.socket_url, extra_headers=self._ws_params.headers,
+                                            loop=loop) as self.ws:
+                    logger.info('Connected')
+                    self._connection.started = True
+                    await self._master_handler(self.ws)
+            except asyncio.CancelledError:
+                self._reconnects += 1
+                logger.warn(f'Disconnected due to cancellation. Num reconnects {self._reconnects}')
+            except Exception:
+                await asyncio.sleep(5)
+                self._reconnects += 1
+                logger.exception(f'Disconnected due to exception. Num reconnects {self._reconnects}')
 
     async def _master_handler(self, ws):
         tasks = [asyncio.ensure_future(self._consumer_handler(ws), loop=self.ws_loop),
