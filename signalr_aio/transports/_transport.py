@@ -46,9 +46,9 @@ class Transport:
     # ===================================
     # Public Methods
 
-    def start(self):
+    def start(self, on_reconnection):
         self._ws_params = WebSocketParameters(self._connection)
-        self._connect()
+        self._connect(on_reconnection)
         if not self.ws_loop.is_running():
             self.ws_loop.run_forever()
             self.ws.close()
@@ -71,10 +71,10 @@ class Transport:
         asyncio.set_event_loop(self.ws_loop)
         self.invoke_queue = asyncio.Queue(loop=self.ws_loop)
 
-    def _connect(self):
-        self._conn_handler = asyncio.ensure_future(self._socket(self.ws_loop), loop=self.ws_loop)
+    def _connect(self, on_reconnection):
+        self._conn_handler = asyncio.ensure_future(self._socket(self.ws_loop, on_reconnection), loop=self.ws_loop)
 
-    async def _socket(self, loop):
+    async def _socket(self, loop, on_reconnection):
         while True:
             if self.ws:
                 await self.ws.close()
@@ -84,6 +84,11 @@ class Transport:
                                             loop=loop) as self.ws:
                     logger.info('Connected')
                     self._connection.started = True
+                    if on_reconnection is not None:
+                        reconn_result = on_reconnection()
+                        if reconn_result and 'quit' in reconn_result and reconn_result['quit']:
+                            logger.warn('Quitting client as reconnection result had quit:true')
+                            return
                     await self._master_handler(self.ws)
             except asyncio.CancelledError:
                 self._reconnects += 1

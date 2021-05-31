@@ -45,9 +45,9 @@ class Connection:
 
         self.received += handle_error
 
-    def start(self):
+    def start(self, on_reconnection):
         self.hub = [hub_name for hub_name in self.__hubs][0]
-        self.__transport.start()
+        self.__transport.start(on_reconnection)
 
     def register_hub(self, name):
         if name not in self.__hubs:
