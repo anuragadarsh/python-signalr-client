@@ -33,7 +33,6 @@ logger = logging.getLogger(__name__)
 class Transport:
     def __init__(self, connection):
         self._connection = connection
-        self._max_reconnects = connection.max_reconnects
         self._timeout = connection.timeout
         self._ws_params = None
         self._conn_handler = None
@@ -46,16 +45,17 @@ class Transport:
     # ===================================
     # Public Methods
 
-    def start(self, on_reconnection):
+    def start(self, on_reconnection, on_disconnection):
         self._ws_params = WebSocketParameters(self._connection)
-        self._connect(on_reconnection)
+        self._connect(on_reconnection, on_disconnection)
         if not self.ws_loop.is_running():
             self.ws_loop.run_forever()
             self.ws.close()
             logger.debug('Websocket: OFF; Event loop: OFF; Exiting...')
 
     def send(self, message):
-        asyncio.Task(self.invoke_queue.put(InvokeEvent(message)), loop=self.ws_loop)
+        asyncio.Task(self.invoke_queue.put(
+            InvokeEvent(message)), loop=self.ws_loop)
 
     def close(self):
         asyncio.Task(self.invoke_queue.put(CloseEvent()), loop=self.ws_loop)
@@ -71,32 +71,36 @@ class Transport:
         asyncio.set_event_loop(self.ws_loop)
         self.invoke_queue = asyncio.Queue(loop=self.ws_loop)
 
-    def _connect(self, on_reconnection):
-        self._conn_handler = asyncio.ensure_future(self._socket(self.ws_loop, on_reconnection), loop=self.ws_loop)
+    def _connect(self, on_reconnection, on_disconnection):
+        self._conn_handler = asyncio.ensure_future(self._socket(
+            self.ws_loop, on_reconnection, on_disconnection), loop=self.ws_loop)
 
-    async def _socket(self, loop, on_reconnection):
+    async def _socket(self, loop, on_reconnection, on_disconnection):
         while True:
             if self.ws:
                 await self.ws.close()
 
             try:
                 async with websockets.connect(self._ws_params.socket_url, extra_headers=self._ws_params.headers,
-                                            loop=loop) as self.ws:
+                                              loop=loop) as self.ws:
                     logger.info('Connected')
                     self._connection.started = True
                     if on_reconnection is not None:
-                        reconn_result = on_reconnection()
-                        if reconn_result and 'quit' in reconn_result and reconn_result['quit']:
-                            logger.warn('Quitting client as reconnection result had quit:true')
-                            return
+                        on_reconnection()
                     await self._master_handler(self.ws)
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as e:
                 self._reconnects += 1
-                logger.warn(f'Disconnected due to cancellation. Num reconnects {self._reconnects}')
-            except Exception:
+                logger.warn(
+                    f'Disconnected due to cancellation. Num reconnects {self._reconnects}')
+                if on_disconnection is not None and not on_disconnection(self._reconnects, e):
+                    return
+            except Exception as e:
                 await asyncio.sleep(5)
                 self._reconnects += 1
-                logger.exception(f'Disconnected due to exception. Num reconnects {self._reconnects}')
+                logger.exception(
+                    f'Disconnected due to exception. Num reconnects {self._reconnects}')
+                if on_disconnection is not None and not on_disconnection(self._reconnects, e):
+                    return
 
     async def _master_handler(self, ws):
         tasks = [asyncio.ensure_future(self._consumer_handler(ws), loop=self.ws_loop),
@@ -116,16 +120,19 @@ class Transport:
                         data = loads(message)
                         await self._connection.received.fire(**data)
                 except asyncio.TimeoutError:
-                    logger.debug('No data in {} seconds, pinging the server.'.format(self._timeout))
+                    logger.debug(
+                        'No data in {} seconds, pinging the server.'.format(self._timeout))
                     try:
                         pong_waiter = await ws.ping()
                         await asyncio.wait_for(pong_waiter, timeout=5)
-                        logger.debug('Ping OK, connection is alive. Attempting to retrieve next message.')
+                        logger.debug(
+                            'Ping OK, connection is alive. Attempting to retrieve next message.')
                     except asyncio.TimeoutError:
                         logger.debug('Ping timeout, reconnecting.')
                         asyncio.current_task().cancel()
         except asyncio.CancelledError:
-            logger.debug('Canceling {}.'.format(self._consumer_handler.__name__))
+            logger.debug('Canceling {}.'.format(
+                self._consumer_handler.__name__))
 
     async def _producer_handler(self, ws):
         try:
@@ -145,4 +152,5 @@ class Transport:
                     break
                 self.invoke_queue.task_done()
         except asyncio.CancelledError:
-            logger.debug('Canceling {}.'.format(self._producer_handler.__name__))
+            logger.debug('Canceling {}.'.format(
+                self._producer_handler.__name__))

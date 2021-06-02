@@ -14,20 +14,17 @@ import requests
 class Connection:
     protocol_version = '1.5'
 
-    def __init__(self, url, session=None, max_reconnects=5, timeout=10):
+    def __init__(self, url, session=None, timeout=10):
         """
 
         :param url: SignalR connecting URL string.
         :type url: str
         :param session: Users can inject their own session, leave as None for default.
         :type session: requests.Session or None
-        :param max_reconnects: Max number of reconnects before the socket stops retring.
-        :type max_reconnects: int
         :param timeout: Max number of time in seconds between messages to wait for before timeout.
         :type timeout: int
         """
         self.url = url
-        self.max_reconnects = max_reconnects
         self.timeout = timeout
         self.__hubs = {}
         self.__send_counter = -1
@@ -45,9 +42,9 @@ class Connection:
 
         self.received += handle_error
 
-    def start(self, on_reconnection):
+    def start(self, on_reconnection, on_disconnection):
         self.hub = [hub_name for hub_name in self.__hubs][0]
-        self.__transport.start(on_reconnection)
+        self.__transport.start(on_reconnection, on_disconnection)
 
     def register_hub(self, name):
         if name not in self.__hubs:
